@@ -1,0 +1,3 @@
+include ':fsocket'
+include ':app'
+rootProject.name = "SocketDemo"

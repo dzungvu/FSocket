@@ -1,7 +1,7 @@
 package com.thedung.socketdemo.model
 
-internal data class DataPush(
-    val type: String,
-    val departure: String,
+import com.thedung.fsocket.helpers.data.BaseSocketData
+
+data class DataPush(
     val customdata1: String
-)
+): BaseSocketData()

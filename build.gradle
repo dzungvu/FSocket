@@ -1,5 +1,8 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 buildscript {
+    apply from: '/fsocket/dependencies.gradle'
+    apply from: '/fsocket/metadata.gradle'
+
     ext.kotlin_version = "1.4.10"
     ext.coroutinesVersion = '1.4.1'
     repositories {

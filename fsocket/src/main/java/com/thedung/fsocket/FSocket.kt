@@ -1,153 +1,188 @@
 package com.thedung.fsocket
 
-import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import com.google.gson.Gson
-import com.google.gson.JsonParser
-import com.thedung.fsocket.annotation.Field
-import com.thedung.fsocket.annotation.ReceiveEvent
-import com.thedung.fsocket.annotation.SendEvent
-import com.thedung.fsocket.models.DataPushTest
-import com.thedung.fsocket.models.Receiver
-import com.thedung.fsocket.utils.Constants
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.channels.ConflatedBroadcastChannel
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
-import me.ibrahimsn.achilleslib.exception.InvalidAnnotationException
-import me.ibrahimsn.achilleslib.exception.InvalidReturnTypeException
+import com.thedung.fsocket.events.*
+import com.thedung.fsocket.listeners.BaseEventListener
+import com.thedung.fsocket.utils.*
 import okhttp3.*
+import okhttp3.internal.ws.RealWebSocket
 import okio.ByteString
-import java.lang.reflect.Method
-import java.lang.reflect.ParameterizedType
-import java.lang.reflect.Proxy
+import org.json.JSONException
+import java.util.concurrent.CopyOnWriteArraySet
+import kotlin.math.pow
+import kotlin.math.roundToLong
 
-/**
- *
- */
-@ExperimentalCoroutinesApi
-class FSocket internal constructor(
-    val url: String,
-    client: OkHttpClient
-) : FSocketAPI, WebSocketListener() {
-    private val socket: WebSocket
-    private val socketListener: WebSocketListener
-    private var logTraffic = true
+class FSocket(
+    private val request: Request,
+    private val client: OkHttpClient,
+) : FSocketAPI {
 
-    private val distributor = ConflatedBroadcastChannel<Receiver>()
+    private val TAG = this::class.java.simpleName
+    private val CLOSE_REASON = "end of session"
+    private val MAX_COLLISION = 7
 
-    init {
+    private val gson = Gson()
+    private val mSocketListener: WebSocketListener by lazy { createWebSocketListener() }
 
-        val request = Request.Builder().url(url).build()
-        socketListener = createWebSocketListener()
-        socket = client.newWebSocket(request, socketListener)
-        client.dispatcher.executorService.shutdown()
+    private var mRealSocket: RealWebSocket? = null
+    private var currentState: FSocketState = FSocketState.CLOSED
+    private var isForceTerminate = false
+    private var mHandler: Handler = Handler(Looper.getMainLooper())
+    private var reconnectionAttempts = 0
+
+    private var timeRetry: Long = Constants.TIME_RETRY_SOCKET_MS
+    private var maxCountRetry: Long = Constants.MAX_RETRY_COUNT
+
+    private val canSendSocket: Boolean
+        get() = currentState == FSocketState.CONNECTED && mRealSocket != null
+
+    private val mEventListener = CopyOnWriteArraySet<BaseEventListener<*>>()
+
+    fun setTimeRetryInterval(timeMs: Long) {
+        timeRetry = timeMs
+    }
+
+    fun setMaxCountRetry(max: Long) {
+        maxCountRetry = max
+    }
+
+    override fun connect() {
+        if (currentState == FSocketState.CLOSED || mRealSocket == null) {
+            mRealSocket = client.newWebSocket(request, mSocketListener) as RealWebSocket
+            changeState(FSocketState.CONNECTING)
+        }
+    }
+
+    override fun send(event: String, data: Any): Boolean {
+        if (canSendSocket) {
+            return send(event, gson.toJson(data))
+        }
+        return false
+    }
+
+    override fun send(event: String, data: String): Boolean {
+        if (canSendSocket) {
+            try {
+                LogUtil.d(TAG, "Data to send: $data")
+                return mRealSocket?.send(data) ?: false
+            } catch (ex: JSONException) {
+                LogUtil.e(TAG, "Please check your data is in right json format")
+            }
+        }
+        return false
+    }
+
+    override fun close() {
+        mRealSocket?.close(1000, CLOSE_REASON)
+    }
+
+    override fun close(code: Int, reason: String) {
+        mRealSocket?.close(code, reason)
+    }
+
+    override fun terminate() {
+        isForceTerminate = true
+        mRealSocket?.cancel()
+        mRealSocket = null
+        changeState(FSocketState.CLOSED)
+    }
+
+    override fun <T : BaseEventListener<*>> addEventListener(listener: T) {
+        mEventListener.add(listener)
+    }
+
+    override fun <T : BaseEventListener<*>> removeEventListener(listener: T) {
+        mEventListener.remove(listener)
+    }
+
+    override fun removeAllListener() {
+        mEventListener.clear()
+    }
+
+
+    private fun reconnect() {
+        if (currentState != FSocketState.CONNECT_ERROR) {
+            return
+        }
+        changeState(FSocketState.RECONNECT_ATTEMPT)
+        mRealSocket?.cancel()
+        mRealSocket = null
+
+        val collision =
+            if (reconnectionAttempts > MAX_COLLISION) MAX_COLLISION
+            else reconnectionAttempts
+
+        val delayTime = ((2.0.pow(collision.toDouble()) - 1) / 2).roundToLong() * 1000
+
+        if (reconnectionAttempts < maxCountRetry) {
+            mHandler.removeCallbacksAndMessages(null)
+            mHandler.postDelayed({
+                LogUtil.e(TAG, "Reconnecttttttt")
+                changeState(FSocketState.CONNECTING)
+                reconnectionAttempts++
+                connect()
+
+            }, delayTime)
+        }
     }
 
     private fun createWebSocketListener(): WebSocketListener {
         return object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                log("Open websocket $webSocket")
-                super.onOpen(webSocket, response)
+                LogUtil.d(TAG, "Socket connected success")
+                reconnectionAttempts = 0
+                changeState(FSocketState.CONNECTED)
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                log("onMessage websocket byte $webSocket")
-                super.onMessage(webSocket, bytes)
+                LogUtil.d(TAG, "Socket receive message with byteString: $bytes")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                log("onMessage websocket String $webSocket")
-                super.onMessage(webSocket, text)
-                val json = JsonParser.parseString(text).asJsonObject
-                log("Receive: $json")
-
-                if (json.has(Constants.ATTR_EVENT) && json.has(Constants.ATTR_DATA)) {
-                    log("Notify: $json")
-                    distributor.offer(Gson().fromJson(json, Receiver::class.java))
-                }
+                LogUtil.d(TAG, "Socket receive message with string: $text")
+                mEventListener.notifyMessage(MessageEvent(text))
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                log("closing websocket $webSocket")
-                super.onClosing(webSocket, code, reason)
+                LogUtil.d(TAG, "Socket closing with reason: $reason")
+                changeState(FSocketState.CLOSING)
+                webSocket.close(1000, reason)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                log("Closed websocket $webSocket")
-                super.onClosed(webSocket, code, reason)
+                LogUtil.d(TAG, "Socket closed success with reason: $reason")
+                changeState(FSocketState.CLOSED)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                log("onFailure websocket byte $webSocket")
-                super.onFailure(webSocket, t, response)
-            }
-        }
-    }
-
-    @ExperimentalCoroutinesApi
-    @FlowPreview
-    @Throws(InvalidReturnTypeException::class)
-    override fun <T> create(serviceInterface: Class<T>): T {
-        return serviceInterface.cast(
-            Proxy.newProxyInstance(
-                serviceInterface.classLoader, arrayOf(serviceInterface)
-            ) { _, method, args ->
-                when {
-                    method.isAnnotationPresent(SendEvent::class.java) -> {
-                        val ann = method.getAnnotation(SendEvent::class.java)
-                        return@newProxyInstance invokeSendMethod(ann, method, args)
-                    }
-                    method.isAnnotationPresent(ReceiveEvent::class.java) -> {
-                        val ann = method.getAnnotation(ReceiveEvent::class.java)
-                        return@newProxyInstance invokeReceiverMethod(ann, method)
-                    }
-                    else -> throw InvalidAnnotationException("Only SendEvent and ReceiveEvent are allowed.")
+                if (!isForceTerminate) {
+                    t.printStackTrace()
+                    LogUtil.e(TAG, "Socket connect error with $t")
+                    changeState(FSocketState.CONNECT_ERROR)
+                    reconnect()
                 }
-            }
-        )!!
-    }
 
-    private fun invokeSendMethod(ann: SendEvent?, method: Method, args: Array<out Any>) {
-        val data = mutableMapOf<String, Any>()
-
-        for ((i, par) in method.parameterAnnotations.withIndex()) {
-            if (par[0] is Field) {
-                data[(par[0] as Field).value] = args[i]
             }
         }
-
-//        val payload = Gson().toJson(
-//            mapOf(
-//                Constants.ATTR_EVENT to ann?.value,
-//                Constants.ATTR_DATA to data
-//            )
-//        )
-        //test
-        val temp = DataPushTest("14", "1", "up")
-        val payload = Gson().toJson(temp)
-        log("Send to: $url: $payload")
-        socket.send(payload)
     }
 
-    @FlowPreview
-    @ExperimentalCoroutinesApi
-    @Throws(InvalidReturnTypeException::class)
-    private fun invokeReceiverMethod(ann: ReceiveEvent?, method: Method): Flow<Any> {
-        return distributor
-            .asFlow().filter { it.event == ann?.value }
-            .map {
-                val json = JsonParser.parseString(it.data.toString()).asJsonObject
-                val typeArg = (method.genericReturnType as ParameterizedType).actualTypeArguments[0]
-                Gson().fromJson(json, typeArg as Class<*>)
-            }
+    private fun changeState(state: FSocketState) {
+        currentState = state
+        postEvent(state)
     }
 
-    private fun log(message: String) {
-        if (logTraffic) {
-            Log.d(Constants.LOG_TAG, message)
+    private fun postEvent(state: FSocketState) {
+        when (state) {
+            FSocketState.CONNECTING -> mEventListener.notifyConnecting(ConnectingEvent())
+            FSocketState.CONNECTED -> mEventListener.notifyConnected(ConnectedEvent())
+            FSocketState.RECONNECT_ATTEMPT -> mEventListener.notifyReconnecting(ReconnectingEvent())
+            FSocketState.CLOSING -> mEventListener.notifyClosing(ClosingEvent())
+            FSocketState.CLOSED -> mEventListener.notifyClosed(ClosedEvent())
+            FSocketState.CONNECT_ERROR -> mEventListener.notifyConnectError(ConnectErrorEvent())
         }
+
     }
+
 }

@@ -1,0 +1,15 @@
+//[Major][Minor][Build][Revision].
+//[1][0][00][0]
+def version_code = 10000
+def version_name = "1.0.0"
+//[Major][Minor][Build]
+//[1].[0].[0]
+
+
+def Versions = [:]
+ext.Versions = Versions
+Versions.compile_sdk = 30
+Versions.min_sdk = 21
+Versions.target_sdk = 30
+Versions.version_code = version_code
+Versions.version_name = version_name

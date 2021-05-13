@@ -1,4 +1,17 @@
 # FSocket
+<h1>Intergration process</h1>
+
+Because I'm not put this in any library repository, so to intergrate this library into your project following bellow step:<br>
+- First, you should pull this repository to your local disk.
+- Then open terminal, where gradlew.bat of this project locate.
+- Type: gradlew buildLib. And it will automatically gennerate a folder in your desktop name FSocketLib(version)
+- Then put the fsocket-release.aar file into your implementation project and confit it into your project by adding to build.gradle file:
+
+```gradle
+implementation project(":fsocket")
+```
+Also, copy the aar file into your project also.
+
 <h1>FSocket Instruction</h1>
 
 <h2>Initialization</h2>

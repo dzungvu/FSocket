@@ -36,6 +36,11 @@ fSocket.run {
 - OnClosedListener: Socket closed, don't listen to channel signal
 - OnReconnectingListener: Socket reconnecting
 
+```kotlin
+fSocket.terminate()
+```
+
+Terminate socket connection.
 <h2>Specific use case</h2>
 
 **If I'm not the one that told you to read this part, don't read, because you will be confused. And you do not need to read this.**<br>

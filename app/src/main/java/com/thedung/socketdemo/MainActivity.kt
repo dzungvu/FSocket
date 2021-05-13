@@ -3,7 +3,9 @@ package com.thedung.socketdemo
 import android.os.Bundle
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
+import com.thedung.fsocket.builder.FSocketBuilder
 import com.thedung.fsocket.helpers.FSocketHelper
+import com.thedung.fsocket.listeners.*
 import com.thedung.socketdemo.model.DataPush
 import com.thedung.socketdemo.services.DemoService
 import kotlinx.android.synthetic.main.activity_main.*
@@ -20,8 +22,22 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-//        val fSocket = FSocketBuilder("wss://echo.websocket.org").build()
+//        val fSocket = FSocketBuilder("wss://echo.websocket.org")
+//            .setConnectionTimeout(30_000L)
+//            .setReadTimeout(30_000L)
+//            .setPingInterval(2_000L)
+//            .build()
+//        fSocket.run {
+//            addEventListener(OnConnectingListener {})
+//            addEventListener(OnConnectedListener {})
+//            addEventListener(OnConnectErrorListener {})
+//            addEventListener(OnMessageListener {})
+//            addEventListener(OnClosingListener {})
+//            addEventListener(OnClosedListener {})
+//            addEventListener(OnReconnectingListener {})
+//        }
 //        fSocket.connect()
+//        fSocket.terminate()
 
         socket.establishConnection("wss://echo.websocket.org")
         val service = socket.create(DemoService::class.java)
